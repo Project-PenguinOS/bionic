@@ -869,7 +869,8 @@ int custom_rom_hide_filter_vintf(const char* path) {
 
 static const char* const kSpoofedEmptyProps[] = {
     "ro.crdroid.version", "ro.lineage.version", "ro.lineage.build.version", "ro.cm.build.version",
-    "ro.modversion", "init.svc_debug_pid.adb_root",
+    "ro.modversion", "ro.aospa.build.variant", "ro.aospa.device", "ro.aospa.version",
+    "ro.aospa.version.major", "ro.aospa.version.minor", "init.svc_debug_pid.adb_root",
     "init.svc.adb_root", "service.adb.root", nullptr
 };
 
