@@ -273,26 +273,20 @@ static bool compute_exempt(bool* is_zygote) {
     return false;
 }
 
-static bool is_exempt_process() {
-    static pid_t cached_pid = -1;
-    static bool cached_value = false;
-    pid_t cur = getpid();
-    if (cur == cached_pid) return cached_value;
-
-    bool is_zygote = false;
-    bool result = compute_exempt(&is_zygote);
-
-    if (!is_zygote) {
-        cached_value = result;
-        cached_pid = cur;
-    }
-    return result;
-}
-
 static bool is_app_process() {
+    // Hot on every property read. App uids never change, so cache per pid once the uid is an
+    // app's (zygote children get theirs on specializing); pid and answer share one word.
+    static _Atomic(uint64_t) cached = 0;
+    uint64_t pid = static_cast<uint32_t>(getpid());
+    uint64_t word = atomic_load_explicit(&cached, memory_order_relaxed);
+    if ((word >> 1) == pid) return (word & 1) != 0;
+
     if ((getuid() % AID_USER_OFFSET) < AID_APP_START) return false;
-    if (is_exempt_process()) return false;
-    return true;
+    bool is_zygote = false;
+    bool exempt = compute_exempt(&is_zygote);
+    if (is_zygote) return false;
+    atomic_store_explicit(&cached, (pid << 1) | (exempt ? 0 : 1), memory_order_relaxed);
+    return !exempt;
 }
 
 static const char* path_basename(const char* path) {
