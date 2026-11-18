@@ -19,6 +19,8 @@
 
 #include <sys/cdefs.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 
 struct statfs;
@@ -41,9 +43,7 @@ void custom_rom_hide_spoof_fd_statfs(int fd, struct statfs* sf);
 void custom_rom_hide_unregister_fd(int fd);
 void custom_rom_hide_transfer_fd(int old_fd, int new_fd);
 
-int custom_rom_hide_filter_vintf(const char* path);
-int custom_rom_hide_filter_proc(const char* path);
-int custom_rom_hide_filter_sepolicy(const char* path);
+int custom_rom_hide_openat(int dirfd, const char* path, int flags, mode_t mode);
 
 bool custom_rom_hide_should_spoof_prop(const char* name, char* value);
 bool custom_rom_hide_should_hide_prop(const char* name);

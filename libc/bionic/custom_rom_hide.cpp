@@ -384,10 +384,10 @@ static bool is_rom_path(const char* path) {
 
 static bool resolve_fd_path(int fd, char* buf, size_t size) {
     char proc_link[64];
-    if (fd < 0) return false;
+    if (fd < 0 || size < 2) return false;
     snprintf(proc_link, sizeof(proc_link), "/proc/self/fd/%d", fd);
     ssize_t n = raw_readlinkat(proc_link, buf, size - 1);
-    if (n > 0) {
+    if (n > 0 && static_cast<size_t>(n) < size - 1) {
         buf[n] = '\0';
         return true;
     }
@@ -595,26 +595,26 @@ static bool should_filter_line(ProcFilterType type, const char* line) {
     }
 }
 
-static char* read_file_raw(const char* path, size_t* out_size) {
-    int fd = raw_openat(path, O_RDONLY);
-    if (fd < 0) return nullptr;
-
+static char* read_file_raw(int fd, size_t* out_size) {
     size_t capacity = 16384;
     size_t size = 0;
     char* buf = static_cast<char*>(malloc(capacity));
-    if (!buf) { raw_close(fd); return nullptr; }
+    if (!buf) return nullptr;
 
     ssize_t n;
-    while ((n = raw_read(fd, buf + size, capacity - size - 1)) > 0) {
+    while (true) {
+        n = pread(fd, buf + size, capacity - size - 1, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { free(buf); return nullptr; }
+        if (n == 0) break;
         size += n;
         if (size >= capacity - 1) {
             capacity *= 2;
             char* new_buf = static_cast<char*>(realloc(buf, capacity));
-            if (!new_buf) { free(buf); raw_close(fd); return nullptr; }
+            if (!new_buf) { free(buf); return nullptr; }
             buf = new_buf;
         }
     }
-    raw_close(fd);
     buf[size] = '\0';
     *out_size = size;
     return buf;
@@ -627,9 +627,9 @@ static void write_line_raw(int mem_fd, char* line, size_t line_len, void*) {
     raw_write(mem_fd, line, line_len);
 }
 
-static int filter_file_with(const char* path, LinePredicate drop, LineWriter writer, void* ctx) {
+static int filter_file_with(const char* path, int source_fd, LinePredicate drop, LineWriter writer, void* ctx) {
     size_t file_size = 0;
-    char* content = read_file_raw(path, &file_size);
+    char* content = read_file_raw(source_fd, &file_size);
     if (!content) return -1;
 
     int mem_fd = create_encoded_memfd(path);
@@ -734,7 +734,7 @@ static bool drop_proc_line(const char* line, void* ctx) {
     return should_filter_line(*static_cast<ProcFilterType*>(ctx), line);
 }
 
-int custom_rom_hide_filter_proc(const char* path) {
+static int custom_rom_hide_filter_proc(const char* path, int source_fd) {
     if (!is_app_process()) return -1;
     if (!path || reinterpret_cast<uintptr_t>(path) < 0x1000000) return -1;
 
@@ -745,13 +745,13 @@ int custom_rom_hide_filter_proc(const char* path) {
     if (type != PROC_FILTER_CMDLINE) {
         LineWriter writer = (type == PROC_FILTER_MOUNTS || type == PROC_FILTER_MOUNTINFO)
                 ? write_spoofed_mount_line : write_line_raw;
-        int mem_fd = filter_file_with(path, drop_proc_line, writer, &type);
+        int mem_fd = filter_file_with(path, source_fd, drop_proc_line, writer, &type);
         errno = saved_errno;
         return mem_fd;
     }
 
     size_t file_size = 0;
-    char* content = read_file_raw(path, &file_size);
+    char* content = read_file_raw(source_fd, &file_size);
     if (!content) { errno = saved_errno; return -1; }
 
     int mem_fd = create_encoded_memfd(path);
@@ -783,14 +783,14 @@ static bool drop_sepolicy_line(const char* line, void*) {
     return line_has_rom_keyword(line);
 }
 
-int custom_rom_hide_filter_sepolicy(const char* path) {
+static int custom_rom_hide_filter_sepolicy(const char* path, int source_fd) {
     if (!is_app_process()) return -1;
     if (!path || reinterpret_cast<uintptr_t>(path) < 0x1000000) return -1;
 
     int saved_errno = errno;
     if (!is_selinux_policy_path(path)) { errno = saved_errno; return -1; }
 
-    int mem_fd = filter_file_with(path, drop_sepolicy_line, write_line_raw, nullptr);
+    int mem_fd = filter_file_with(path, source_fd, drop_sepolicy_line, write_line_raw, nullptr);
     errno = saved_errno;
     return mem_fd;
 }
@@ -815,9 +815,10 @@ static const char* const kVintfFilterKeywords[] = {
 };
 #endif
 
-int custom_rom_hide_filter_vintf(const char* path) {
+static int custom_rom_hide_filter_vintf(const char* path, int source_fd) {
 #if !CUSTOM_ROM_HIDE_FILTER_VINTF
     (void) path;
+    (void) source_fd;
     return -1;
 #else
     if (!is_app_process()) return -1;
@@ -833,7 +834,7 @@ int custom_rom_hide_filter_vintf(const char* path) {
     struct VintfCtx {
         int skip_depth;
     } ctx = {};
-    int mem_fd = filter_file_with(path, [](const char* line, void* raw_ctx) {
+    int mem_fd = filter_file_with(path, source_fd, [](const char* line, void* raw_ctx) {
         VintfCtx* ctx = static_cast<VintfCtx*>(raw_ctx);
         bool keyword_hit = line_contains_any(line, kVintfFilterKeywords);
         bool opens_block = strstr(line, "<hal") != nullptr || strstr(line, "<interface") != nullptr;
@@ -859,6 +860,47 @@ int custom_rom_hide_filter_vintf(const char* path) {
     errno = saved_errno;
     return mem_fd;
 #endif
+}
+
+int custom_rom_hide_openat(int dirfd, const char* path, int flags, mode_t mode) {
+    if (custom_rom_hide_should_block_at(dirfd, path)) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    int source_fd = static_cast<int>(syscall(__NR_openat, dirfd, path, flags, mode));
+    if (source_fd < 0 || !is_app_process()) return source_fd;
+
+    // Leave special opens and all write access to the kernel. Substitution must
+    // not bypass O_NOFOLLOW, O_DIRECTORY, O_PATH or creation semantics.
+    if ((flags & ~(O_CLOEXEC | O_LARGEFILE)) != O_RDONLY) return source_fd;
+
+    int saved_errno = errno;
+    char resolved[512];
+    if (!resolve_fd_path(source_fd, resolved, sizeof(resolved))) {
+        errno = saved_errno;
+        return source_fd;
+    }
+
+    int filtered_fd = custom_rom_hide_filter_proc(resolved, source_fd);
+    if (filtered_fd < 0) filtered_fd = custom_rom_hide_filter_vintf(resolved, source_fd);
+    if (filtered_fd < 0) filtered_fd = custom_rom_hide_filter_sepolicy(resolved, source_fd);
+    if (filtered_fd < 0) {
+        errno = saved_errno;
+        return source_fd;
+    }
+
+    // A memfd is initially writable so it can be populated. Reopen it with the
+    // requested read-only access before exposing it to the caller.
+    char fd_path[64];
+    snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", filtered_fd);
+    int result = raw_openat(fd_path, O_RDONLY | (flags & (O_CLOEXEC | O_LARGEFILE)));
+    if (result >= 0) register_fd(result);
+    custom_rom_hide_unregister_fd(filtered_fd);
+    raw_close(filtered_fd);
+    if (result >= 0) raw_close(source_fd);
+    errno = saved_errno;
+    return result >= 0 ? result : source_fd;
 }
 
 static const char* const kSpoofedEmptyProps[] = {
