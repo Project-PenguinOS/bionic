@@ -696,13 +696,6 @@ static const MountDm kMountDm[] = {
 };
 
 static void write_spoofed_mount_line(int mem_fd, char* line, size_t line_len, void*) {
-    char* rw_delim = strstr(line, ",rw,");
-    if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
-    rw_delim = strstr(line, " rw,");
-    if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
-    rw_delim = strstr(line, ",rw ");
-    if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
-
     if (!strstr(line, "/dev/block/loop")) {
         const char* replacement = nullptr;
         for (const MountDm* m = kMountDm; m->mnt; ++m) {
@@ -714,6 +707,13 @@ static void write_spoofed_mount_line(int mem_fd, char* line, size_t line_len, vo
             replacement = "/dev/block/dm-0";
 
         if (replacement) {
+            // Only partition mounts participate in this compatibility view.
+            char* rw_delim = strstr(line, ",rw,");
+            if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
+            rw_delim = strstr(line, " rw,");
+            if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
+            rw_delim = strstr(line, ",rw ");
+            if (rw_delim) { rw_delim[1] = 'r'; rw_delim[2] = 'o'; }
             char* dev_start = strstr(line, "/dev/block/");
             if (!dev_start) dev_start = strstr(line, "/dev/root");
 
