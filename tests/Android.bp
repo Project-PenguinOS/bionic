@@ -1447,3 +1447,21 @@ cc_library_static {
         "-D_FORTIFY_SOURCE=3",
     ],
 }
+
+// These checks use host credentials and proc files, with only the app UID query mocked.
+cc_test_host {
+    name: "custom_rom_hide_test",
+    compile_multilib: "64",
+    srcs: [
+        "custom_rom_hide_test.cpp",
+        ":custom_rom_hide_test_srcs",
+    ],
+    header_libs: ["libcutils_headers", "libc_uapi_headers"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    enabled: false,
+    target: {
+        linux_glibc: {
+            enabled: true,
+        },
+    },
+}

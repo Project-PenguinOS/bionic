@@ -1877,6 +1877,7 @@ cc_library_headers {
 cc_library_headers {
     name: "libc_uapi_headers",
     visibility: [
+        "//bionic/tests",
         "//external/musl",
         "//external/rust/crates/v4l2r/android",
         "//system/memory/libmeminfo/libelfutils",
@@ -3149,4 +3150,10 @@ cc_genrule {
 filegroup {
     name: "linux_capability_header",
     srcs: ["kernel/uapi/linux/capability.h"],
+}
+
+filegroup {
+    name: "custom_rom_hide_test_srcs",
+    srcs: ["bionic/custom_rom_hide.cpp"],
+    visibility: ["//bionic/tests"],
 }
