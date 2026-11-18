@@ -78,7 +78,7 @@ const prop_info* __system_property_find(const char* name) {
 __BIONIC_WEAK_FOR_NATIVE_BRIDGE
 int __system_property_read(const prop_info* pi, char* name, char* value) {
   int len = system_properties.Read(pi, name, value);
-  if (name && custom_rom_hide_should_spoof_prop(name, value)) {
+  if (custom_rom_hide_should_spoof_prop(pi->name, value)) {
     return strlen(value);
   }
   return len;
@@ -212,7 +212,18 @@ bool __system_property_wait(const prop_info* pi, uint32_t old_serial, uint32_t* 
 
 __BIONIC_WEAK_FOR_NATIVE_BRIDGE
 const prop_info* __system_property_find_nth(unsigned n) {
-  return system_properties.FindNth(n);
+  if (!custom_rom_hide_is_app_process()) return system_properties.FindNth(n);
+  struct FindNthCtx {
+    unsigned remaining;
+    const prop_info* result;
+  } ctx{n, nullptr};
+  system_properties.Foreach([](const prop_info* pi, void* cookie) {
+    auto* ctx = static_cast<FindNthCtx*>(cookie);
+    if (ctx->result || custom_rom_hide_should_hide_prop(pi->name)) return;
+    if (ctx->remaining == 0) ctx->result = pi;
+    else --ctx->remaining;
+  }, &ctx);
+  return ctx.result;
 }
 
 struct ForeachOverrideCtx {
